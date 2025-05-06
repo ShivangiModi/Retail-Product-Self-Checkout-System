@@ -42,10 +42,10 @@ app = Flask(__name__)
 run_with_ngrok(app)  # Automatically starts ngrok
 
 # Load YOLOv8 trained model - Vaishnavi - 180 epoch
-model = YOLO('/content/drive/MyDrive/retail_product_checkout_validation_filtered/detect_250_epochs/train/weights/best.pt')
+model = YOLO('best.pt')
 
 # Load billing data
-billing_data = pd.read_csv('/content/drive/MyDrive/Reduce_new_data/product_prices.csv')
+billing_data = pd.read_csv('product_prices.csv')
 billing_data.columns = ['Product', 'Price']
 
 # Start ngrok
@@ -58,7 +58,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 @app.route('/')
 def home():
-    return send_file('/content/drive/MyDrive/Reduce_new_data/webpage_design.html')
+    return send_file('templates/webpage_design.html')
 
 @app.route('/upload', methods=['POST'])
 def upload_image():
@@ -111,12 +111,12 @@ def upload_image():
 @app.route('/payment')
 def payment_page():
     amount = request.args.get('amount', '0.00')
-    return send_file('/content/drive/MyDrive/Reduce_new_data/payment.html')
+    return send_file('templates/payment.html')
 
 
 @app.route('/payment/success', methods=['GET'])
 def payment_success():
-    return send_file('/content/drive/MyDrive/Reduce_new_data/success.html')
+    return send_file('templates/success.html')
 
 @app.route('/download_bill', methods=['POST'])
 def download_bill():
