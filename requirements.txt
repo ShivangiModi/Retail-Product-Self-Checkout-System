@@ -1,2 +1,9 @@
 flask
+opencv-python
+torch
+torchvision
+pillow
+pandas
+ultralytics
+reportlab
 mysql-connector-python
