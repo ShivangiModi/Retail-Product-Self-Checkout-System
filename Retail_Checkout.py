@@ -135,5 +135,6 @@ def download_bill():
     return send_file(buffer, as_attachment=True, download_name="final_bill.pdf", mimetype='application/pdf')
 
 if __name__ == '__main__':
-    print("Server is starting...")
-    app.run(host='0.0.0.0', port=8080, debug=False)
+    port = int(os.environ.get('PORT', 8080))  # Default to 8080 if PORT is not set
+    print(f"Server is starting on port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False)
