@@ -1,140 +1,82 @@
-from flask import Flask, request, jsonify, send_file, send_from_directory
-import cv2
-import numpy as np
-import pandas as pd
-import torch
+from flask import Flask, render_template, request, redirect, url_for
 import os
-from collections import Counter
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-from io import BytesIO
+import mysql.connector
 from ultralytics import YOLO
+from PIL import Image
+import io
+import base64
 
-# Initialize Flask app
 app = Flask(__name__)
 
-# Load YOLOv8 trained model
-model = YOLO('best.pt')
+# Load model
+model = YOLO("best.pt")  # Ensure this model file is in the container
 
-# Load billing data
-billing_data = pd.read_csv('product_prices.csv')
-billing_data.columns = ['Product', 'Price']
+# Configure MySQL connection
+db_config = {
+    "host": "34.70.220.45",  # Or use the internal IP / connection name if in GCP
+    "user": "root",
+    "password": "root",
+    "database": "retail_products"
+}
 
-# Ensure upload directory exists
-UPLOAD_FOLDER = "uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# Product prices for mock billing
+product_prices = {
+    "lays": 1.50,
+    "oreo": 2.00,
+    "sprite": 1.75,
+    "cocacola": 1.75,
+    "detergent": 4.25
+}
 
-@app.route('/')
-def home():
-    return send_file('templates/webpage_design.html')
+def connect_to_database():
+    return mysql.connector.connect(**db_config)
 
-@app.route('/upload', methods=['POST'])
-def upload_image():
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image provided'}), 400
+def save_to_db(product_name, price):
+    connection = connect_to_database()
+    cursor = connection.cursor()
+    query = "INSERT INTO billing (product, price) VALUES (%s, %s)"
+    cursor.execute(query, (product_name, price))
+    connection.commit()
+    cursor.close()
+    connection.close()
 
-    try:
-        file = request.files['image']
-        image_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        file.save(image_path)
+@app.route('/', methods=['GET', 'POST'])
+def upload():
+    if request.method == 'POST':
+        image_file = request.files['image']
+        if image_file:
+            image = Image.open(image_file.stream)
+            results = model(image)
 
-        img = cv2.imread(image_path)
+            product_set = set()
+            for result in results:
+                for box in result.boxes:
+                    cls = int(box.cls[0])
+                    label = model.names[cls]
+                    product_set.add(label)
 
-        # Run YOLOv8 detection
-        results = model(img)
-        result = results[0]
+            bill = []
+            total = 0.0
+            for product in product_set:
+                price = product_prices.get(product.lower(), 0)
+                bill.append({'product': product, 'price': price})
+                save_to_db(product, price)
+                total += price
 
-        # Get class indices and map to names
-        class_ids = result.boxes.cls.cpu().numpy().astype(int)
-        detected_products = [model.names[i] for i in class_ids]
+            # Convert image to base64 for display
+            img_io = io.BytesIO()
+            image.save(img_io, 'JPEG')
+            img_io.seek(0)
+            img_base64 = base64.b64encode(img_io.getvalue()).decode()
 
-        # Generate bill
-        bill = []
-        total_price = 0
+            return render_template('payment.html', bill=bill, total=total, image=img_base64)
 
-        # Count occurrences of each product
-        product_counts = Counter(detected_products)
+    return render_template('upload.html')
 
-        for product, count in product_counts.items():
-            product_info = billing_data[billing_data['Product'] == product]
-            if not product_info.empty:
-                unit_price = float(product_info['Price'].values[0])
-                total = unit_price * count
-                bill.append({
-                    'Product': product,
-                    'Quantity': count,
-                    'Unit_Price': unit_price,
-                    'Total': total
-                })
-                total_price += total
-
-        response = {
-            'detected_products': detected_products,
-            'bill': bill,
-            'total_price': total_price,
-            'total_items': sum(product_counts.values())
-        }
-        return jsonify(response)
-
-    except Exception as e:
-        print("Error during upload_image:", str(e))
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/payment')
-def payment_page():
-    amount = request.args.get('amount', '0.00')
-    return send_file('templates/payment.html')
-
-@app.route('/payment/success', methods=['GET'])
-def payment_success():
-    return send_file('templates/success.html')
-
-@app.route('/download_bill', methods=['POST'])
-def download_bill():
-    data = request.get_json()
-
-    bill = data.get('bill', [])
-    total_price = data.get('total_price', 0)
-    total_items = data.get('total_items', 0)
-
-    # Generate PDF
-    buffer = BytesIO()
-    c = canvas.Canvas(buffer, pagesize=letter)
-    width, height = letter
-
-    y = height - 50
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y, "Smart Retail Checkout - Final Bill")
-    y -= 40
-
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, "Product")
-    c.drawString(200, y, "Qty")
-    c.drawString(250, y, "Unit Price")
-    c.drawString(350, y, "Total")
-    y -= 20
-
-    c.setFont("Helvetica", 12)
-    for item in bill:
-        c.drawString(50, y, item['Product'])
-        c.drawString(200, y, str(item['Quantity']))
-        c.drawString(250, y, f"${item['Unit_Price']:.2f}")
-        c.drawString(350, y, f"${item['Total']:.2f}")
-        y -= 20
-
-    y -= 10
-    c.line(50, y, 500, y)
-    y -= 30
-    c.setFont("Helvetica-Bold", 12)
-    c.drawString(50, y, f"Total Items: {total_items}")
-    c.drawString(250, y, f"Total Price: ${total_price:.2f}")
-
-    c.save()
-    buffer.seek(0)
-
-    return send_file(buffer, as_attachment=True, download_name="final_bill.pdf", mimetype='application/pdf')
+@app.route('/success')
+def success():
+    return render_template('success.html')
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))  # Default to 8080 if PORT is not set
-    print(f"Server is starting on port {port}...")
+    port = int(os.environ.get("PORT", 8080))  # Required for Cloud Run
     app.run(host='0.0.0.0', port=port, debug=False)
